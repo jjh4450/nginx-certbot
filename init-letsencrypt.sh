@@ -1,0 +1,180 @@
+#!/bin/bash
+
+# 권한 확인
+if [[ $EUID -ne 0 ]]; then
+   echo "This script must be run as root" 
+   exit 1
+fi
+
+# 도움말 출력 함수
+function show_help() {
+  cat << EOF
+Usage: $(basename "$0") [OPTIONS]
+This script automates the process of obtaining and renewing SSL certificates for multiple domains using Let's Encrypt, NGINX, and Docker Compose.
+
+Options:
+  -h, --help                Show this help message and exit
+  -d, --domains DOMAINS     List of domains to request certificates for (e.g. "example.org www.example.org")
+  -e, --email EMAIL         Email address for Let's Encrypt registration (optional, but recommended)
+  -s, --staging             Use Let's Encrypt's staging environment for testing (avoids request limits)
+  -k, --keysize SIZE        Specify the RSA key size for the certificate (default: 4096)
+  -p, --path PATH           Path to store certbot data (default: ./data/certbot)
+
+Examples:
+  $(basename "$0") -d "example.org www.example.org" -e "admin@example.org"
+  $(basename "$0") -d "example.org" -s
+EOF
+}
+
+# 기본 변수 설정
+domains=()
+rsa_key_size=4096
+data_path="./data/certbot"
+email=""
+staging=0
+
+# 옵션 처리
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      show_help
+      exit 0
+      ;;
+    -d|--domains)
+      if [ -z "$2" ]; then
+        echo "Error: --domains requires an argument"
+        exit 1
+      fi
+      IFS=' ' read -r -a domains <<< "$2"
+      shift 2
+      ;;
+    -e|--email)
+      if [ -z "$2" ]; then
+        echo "Error: --email requires an argument"
+        exit 1
+      fi
+      email="$2"
+      shift 2
+      ;;
+    -s|--staging)
+      staging=1
+      shift
+      ;;
+    -k|--keysize)
+      if [ -z "$2" ] || ! [[ "$2" =~ ^[0-9]+$ ]]; then
+        echo "Error: --keysize requires a numeric argument"
+        exit 1
+      fi
+      rsa_key_size="$2"
+      shift 2
+      ;;
+    -p|--path)
+      if [ -z "$2" ]; then
+        echo "Error: --path requires an argument"
+        exit 1
+      fi
+      data_path="$2"
+      shift 2
+      ;;
+    *)
+      echo "Unknown option: $1"
+      show_help
+      exit 1
+      ;;
+  esac
+done
+
+# 도메인 입력 확인
+if [ ${#domains[@]} -eq 0 ]; then
+  echo "Error: At least one domain must be specified using -d or --domains"
+  show_help
+  exit 1
+fi
+
+# Docker Compose 설치 확인
+if ! [ -x "$(command -v docker-compose)" ]; then
+  echo 'Error: docker-compose is not installed.' >&2
+  exit 1
+fi
+
+# 기존 데이터 확인
+if [ -d "$data_path" ]; then
+  read -p "Existing data found for ${domains[*]}. Continue and replace existing certificate? (y/N) " decision
+  if [ "$decision" != "Y" ] && [ "$decision" != "y" ]; then
+    exit
+  fi
+fi
+
+# TLS 파라미터 다운로드
+for file in "options-ssl-nginx.conf" "ssl-dhparams.pem"; do
+  if [ ! -e "$data_path/conf/$file" ]; then
+    echo "### Downloading recommended TLS parameters ..."
+    mkdir -p "$data_path/conf"
+    if ! curl -s https://raw.githubusercontent.com/certbot/certbot/master/certbot-nginx/certbot_nginx/_internal/tls_configs/$file > "$data_path/conf/$file"; then
+      echo "Failed to download $file"
+      exit 1
+    fi
+  fi
+done
+
+echo "### Creating dummy certificate for ${domains[*]} ..."
+path="/etc/letsencrypt/live/${domains[0]}"
+mkdir -p "$data_path/conf/live/${domains[0]}"
+
+# 더미 인증서 생성
+if ! docker-compose run --rm --entrypoint "\
+  openssl req -x509 -nodes -newkey rsa:$rsa_key_size -days 1\
+    -keyout '$path/privkey.pem' \
+    -out '$path/fullchain.pem' \
+    -subj '/CN=localhost'" certbot; then
+  echo "Failed to create dummy certificate"
+  exit 1
+fi
+
+echo "### Starting nginx ..."
+if ! docker-compose up --force-recreate -d nginx; then
+  echo "Failed to start nginx"
+  exit 1
+fi
+
+echo "### Deleting dummy certificate for ${domains[*]} ..."
+if ! docker-compose run --rm --entrypoint "\
+  rm -Rf /etc/letsencrypt/live/${domains[0]} && \
+  rm -Rf /etc/letsencrypt/archive/${domains[0]} && \
+  rm -Rf /etc/letsencrypt/renewal/${domains[0]}.conf" certbot; then
+  echo "Failed to delete dummy certificate"
+  exit 1
+fi
+
+echo "### Requesting Let's Encrypt certificate for ${domains[*]} ..."
+domain_args=""
+for domain in "${domains[@]}"; do
+  domain_args="$domain_args -d $domain"
+done
+
+case "$email" in
+  "") email_arg="--register-unsafely-without-email" ;;
+  *) email_arg="--email $email" ;;
+esac
+
+if [ $staging != "0" ]; then staging_arg="--staging"; fi
+
+if ! docker-compose run --rm --entrypoint "\
+  certbot certonly --webroot -w /var/www/certbot \
+    $staging_arg \
+    $email_arg \
+    $domain_args \
+    --rsa-key-size $rsa_key_size \
+    --agree-tos \
+    --force-renewal" certbot; then
+  echo "Failed to obtain SSL certificate"
+  exit 1
+fi
+
+echo "### Reloading nginx ..."
+if ! docker-compose exec nginx nginx -s reload; then
+  echo "Failed to reload nginx"
+  exit 1
+fi
+
+echo "SSL certificate installation completed successfully!"
