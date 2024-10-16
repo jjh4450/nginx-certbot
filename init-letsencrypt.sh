@@ -90,16 +90,13 @@ if [ -d "$data_path" ]; then
   fi
 fi
 
-for file in "options-ssl-nginx.conf" "ssl-dhparams.pem"; do
-  if [ ! -e "$data_path/conf/$file" ]; then
-    echo "### Downloading recommended TLS parameters ..."
-    mkdir -p "$data_path/conf"
-    if ! curl -s https://raw.githubusercontent.com/certbot/certbot/master/certbot-nginx/certbot_nginx/_internal/tls_configs/$file > "$data_path/conf/$file"; then
-      echo "Failed to download $file"
-      exit 1
-    fi
-  fi
-done
+if [ ! -e "$data_path/conf/options-ssl-nginx.conf" ] || [ ! -e "$data_path/conf/ssl-dhparams.pem" ]; then
+  echo "### Downloading recommended TLS parameters ..."
+  mkdir -p "$data_path/conf"
+  curl -s https://raw.githubusercontent.com/certbot/certbot/master/certbot-nginx/certbot_nginx/_internal/tls_configs/options-ssl-nginx.conf > "$data_path/conf/options-ssl-nginx.conf"
+  curl -s https://raw.githubusercontent.com/certbot/certbot/master/certbot/certbot/ssl-dhparams.pem > "$data_path/conf/ssl-dhparams.pem"
+  echo
+fi
 
 echo "### Creating dummy certificate for ${domains[*]} ..."
 path="/etc/letsencrypt/live/${domains[0]}"
