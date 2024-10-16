@@ -102,7 +102,6 @@ for file in "options-ssl-nginx.conf" "ssl-dhparams.pem"; do
 done
 
 echo "### Creating dummy certificate for ${domains[*]} ..."
-# Modify the path to use $data_path instead of /etc/letsencrypt
 path="$data_path/conf/live/${domains[0]}"
 mkdir -p "$path"
 
