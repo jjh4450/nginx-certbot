@@ -102,8 +102,8 @@ for file in "options-ssl-nginx.conf" "ssl-dhparams.pem"; do
 done
 
 echo "### Creating dummy certificate for ${domains[*]} ..."
-path="$data_path/conf/live/${domains[0]}"
-mkdir -p "$path"
+path="/etc/letsencrypt/live/${domains[0]}"
+mkdir -p "$data_path/conf/live/${domains[0]}"
 
 if ! docker compose run --rm --entrypoint "\
   openssl req -x509 -nodes -newkey rsa:$rsa_key_size -days 1\
@@ -122,9 +122,9 @@ fi
 
 echo "### Deleting dummy certificate for ${domains[*]} ..."
 if ! docker compose run --rm --entrypoint "\
-  rm -Rf $data_path/conf/live/${domains[0]} && \
-  rm -Rf $data_path/conf/archive/${domains[0]} && \
-  rm -Rf $data_path/conf/renewal/${domains[0]}.conf" certbot; then
+  rm -Rf /etc/letsencrypt/live/${domains[0]} && \
+  rm -Rf /etc/letsencrypt/archive/${domains[0]} && \
+  rm -Rf /etc/letsencrypt/renewal/${domains[0]}.conf" certbot; then
   echo "Failed to delete dummy certificate"
   exit 1
 fi
