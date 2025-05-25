@@ -17,11 +17,10 @@ Options:
   -s, --staging             Use Let's Encrypt's staging environment for testing (avoids request limits)
   -k, --keysize SIZE        Specify the RSA key size for the certificate (default: 4096)
   -p, --path PATH           Path to store certbot data (default: ./data/certbot)
-  -n, --cert-name NAME      Specify a name for the certificate (default: first domain name)
 
 Examples:
   $(basename "$0") -d "example.org www.example.org" -e "admin@example.org"
-  $(basename "$0") -d "example.org" -s -n "my-fixed-cert-name"
+  $(basename "$0") -d "example.org" -s
 EOF
 }
 
@@ -30,7 +29,6 @@ rsa_key_size=4096
 data_path="./data/certbot"
 email=""
 staging=0
-cert_name=""
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -66,22 +64,6 @@ while [[ "$#" -gt 0 ]]; do
       rsa_key_size="$2"
       shift 2
       ;;
-    -p|--path)
-      if [ -z "$2" ]; then
-        echo "Error: --path requires an argument"
-        exit 1
-      fi
-      data_path="$2"
-      shift 2
-      ;;
-    -n|--cert-name)
-      if [ -z "$2" ]; then
-        echo "Error: --cert-name requires an argument"
-        exit 1
-      fi
-      cert_name="$2"
-      shift 2
-      ;;
     *)
       echo "Unknown option: $1"
       show_help
@@ -94,10 +76,6 @@ if [ ${#domains[@]} -eq 0 ]; then
   echo "Error: At least one domain must be specified using -d or --domains"
   show_help
   exit 1
-fi
-
-if [ -z "$cert_name" ]; then
-  cert_name="${domains[0]}"
 fi
 
 if ! [ -x "$(command -v docker compose)" ]; then
@@ -121,8 +99,8 @@ if [ ! -e "$data_path/conf/options-ssl-nginx.conf" ] || [ ! -e "$data_path/conf/
 fi
 
 echo "### Creating dummy certificate for ${domains[*]} ..."
-path="/etc/letsencrypt/live/$cert_name"
-mkdir -p "$data_path/conf/live/$cert_name"
+path="/etc/letsencrypt/live/${domains[0]}"
+mkdir -p "$data_path/conf/live/${domains[0]}"
 
 if ! docker compose run --rm --entrypoint "\
   openssl req -x509 -nodes -newkey rsa:$rsa_key_size -days 1\
@@ -141,9 +119,9 @@ fi
 
 echo "### Deleting dummy certificate for ${domains[*]} ..."
 if ! docker compose run --rm --entrypoint "\
-  rm -Rf /etc/letsencrypt/live/$cert_name && \
-  rm -Rf /etc/letsencrypt/archive/$cert_name && \
-  rm -Rf /etc/letsencrypt/renewal/$cert_name.conf" certbot; then
+  rm -Rf /etc/letsencrypt/live/${domains[0]} && \
+  rm -Rf /etc/letsencrypt/archive/${domains[0]} && \
+  rm -Rf /etc/letsencrypt/renewal/${domains[0]}.conf" certbot; then
   echo "Failed to delete dummy certificate"
   exit 1
 fi
@@ -168,8 +146,7 @@ if ! docker compose run --rm --entrypoint "\
     $domain_args \
     --rsa-key-size $rsa_key_size \
     --agree-tos \
-    --force-renewal \
-    --cert-name $cert_name" certbot; then
+    --force-renewal" certbot; then
   echo "Failed to obtain SSL certificate"
   exit 1
 fi
